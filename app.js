@@ -6,6 +6,100 @@ const app = express();
 const sqlite3 = require("sqlite3");
 
 app.use(express.json());
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+
+function App() {
+  const [message, setMessage] = useState('');
+  const [transactions, setTransactions] = useState([]);
+  const [selectedMonth, setSelectedMonth] = useState('March');
+  const [searchText, setSearchText] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    // Fetch initial message from the server
+    axios.get('http://localhost:3001/initialize-database')
+      .then((response) => setMessage(response.data.message))
+      .catch((error) => console.error(error));
+
+    // Fetch transactions for the selected month
+    fetchTransactions();
+  }, [selectedMonth, currentPage, searchText]);
+
+  const fetchTransactions = () => {
+    axios.get(`http://localhost:3001/list-transactions?month=${selectedMonth}&page=${currentPage}&search=${searchText}`)
+      .then((response) => setTransactions(response.data.transactions))
+      .catch((error) => console.error(error));
+  };
+
+  const handleSearchChange = (event) => {
+    setSearchText(event.target.value);
+  };
+
+  const handleMonthChange = (event) => {
+    setSelectedMonth(event.target.value);
+  };
+
+  const handleNextPage = () => {
+    setCurrentPage((prevPage) => prevPage + 1);
+  };
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage((prevPage) => prevPage - 1);
+    }
+  };
+
+  return (
+    <div className="App">
+      <h1>{message}</h1>
+
+      <label>Select Month:</label>
+      <select value={selectedMonth} onChange={handleMonthChange}>
+        {/* Populate months dynamically */}
+        <option value="January">January</option>
+        <option value="February">February</option>
+        <option value="March">March</option>
+        {/* Add other months as needed */}
+      </select>
+
+      <h2>Transactions for {selectedMonth}</h2>
+
+      <input type="text" placeholder="Search transactions" value={searchText} onChange={handleSearchChange} />
+      <button onClick={() => setSearchText('')}>Clear Search</button>
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Description</th>
+            <th>Price</th>
+            <th>Date of Sale</th>
+            <th>Category</th>
+          </tr>
+        </thead>
+        <tbody>
+          {transactions.map((transaction) => (
+            <tr key={transaction.id}>
+              <td>{transaction.id}</td>
+              <td>{transaction.title}</td>
+              <td>{transaction.description}</td>
+              <td>{transaction.price}</td>
+              <td>{transaction.date_of_sale}</td>
+              <td>{transaction.category}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <button onClick={handlePrevPage}>Previous</button>
+      <button onClick={handleNextPage}>Next</button>
+    </div>
+  );
+}
+
+export default App;
 
 const { open } = require("sqlite");
 
