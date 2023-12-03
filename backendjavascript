@@ -1,0 +1,192 @@
+const express = require('express');
+const axios = require('axios');
+const sqlite3 = require('sqlite3').verbose();
+
+const app = express();
+const port = 3001;
+
+// Initialize SQLite database
+const db = new sqlite3.Database('./transactions.db');
+
+// Create transactions table if not exists
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY,
+      title TEXT,
+      description TEXT,
+      price REAL,
+      date_of_sale TEXT,
+      category TEXT
+    )
+  `);
+});
+
+// API to initialize the database
+app.get('/initialize-database', async (req, res) => {
+  try {
+    const response = await axios.get('https://s3.amazonaws.com/roxiler.com/product_transaction.json');
+    const data = response.data;
+
+    const stmt = db.prepare('INSERT INTO transactions (title, description, price, date_of_sale, category) VALUES (?, ?, ?, ?, ?)');
+
+    db.serialize(() => {
+      data.forEach((transaction) => {
+        stmt.run(
+          transaction.title,
+          transaction.description,
+          transaction.price,
+          transaction.dateOfSale,
+          transaction.category
+        );
+      });
+    });
+
+    stmt.finalize();
+
+    res.json({ message: 'Database initialized successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API to list all transactions
+app.get('/list-transactions', (req, res) => {
+  const month = req.query.month;
+  const search = req.query.search || '';
+  const page = parseInt(req.query.page) || 1;
+  const perPage = parseInt(req.query.perPage) || 10;
+
+  const offset = (page - 1) * perPage;
+
+  let query = `SELECT * FROM transactions WHERE date_of_sale LIKE '${month}%'`;
+  
+  if (search) {
+    query += ` AND (title LIKE '%${search}%' OR description LIKE '%${search}%' OR price LIKE '%${search}%')`;
+  }
+
+  query += ` LIMIT ${perPage} OFFSET ${offset}`;
+
+  db.all(query, (err, transactions) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+    } else {
+      res.json({ transactions });
+    }
+  });
+});
+
+// API for statistics
+app.get('/statistics', (req, res) => {
+  const month = req.query.month;
+
+  db.get(`
+    SELECT
+      SUM(price) as totalSaleAmount,
+      COUNT(*) as totalSoldItems,
+      (SELECT COUNT(*) FROM transactions WHERE date_of_sale LIKE '${month}%' AND price = 0) as totalNotSoldItems
+    FROM transactions
+    WHERE date_of_sale LIKE '${month}%'
+  `, (err, result) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+    } else {
+      res.json(result);
+    }
+  });
+});
+
+// API for bar chart
+app.get('/bar-chart', (req, res) => {
+  const month = req.query.month;
+
+  const priceRanges = [
+    { min: 0, max: 100 },
+    { min: 101, max: 200 },
+    { min: 201, max: 300 },
+    { min: 301, max: 400 },
+    { min: 401, max: 500 },
+    { min: 501, max: 600 },
+    { min: 601, max: 700 },
+    { min: 701, max: 800 },
+    { min: 801, max: 900 },
+    { min: 901, max: Number.MAX_SAFE_INTEGER }
+  ];
+
+  const results = [];
+
+  priceRanges.forEach((range) => {
+    const { min, max } = range;
+    const query = `
+      SELECT COUNT(*) as count
+      FROM transactions
+      WHERE date_of_sale LIKE '${month}%' AND price >= ${min} AND price <= ${max}
+    `;
+
+    db.get(query, (err, result) => {
+      if (err) {
+        res.status(500).json({ error: err.message });
+      } else {
+        results.push({ range: `${min}-${max}`, count: result.count });
+        
+        if (results.length === priceRanges.length) {
+          res.json(results);
+        }
+      }
+    });
+  });
+});
+
+// API for pie chart
+app.get('/pie-chart', (req, res) => {
+  const month = req.query.month;
+
+  const query = `
+    SELECT category, COUNT(*) as count
+    FROM transactions
+    WHERE date_of_sale LIKE '${month}%'
+    GROUP BY category
+  `;
+
+  db.all(query, (err, results) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+    } else {
+      const categories = results.reduce((acc, result) => {
+        acc[result.category] = result.count;
+        return acc;
+      }, {});
+
+      res.json(categories);
+    }
+  });
+});
+
+// API for combined data
+app.get('/combined-data', async (req, res) => {
+  try {
+    const month = req.query.month;
+
+    const [transactions, statistics, barChart, pieChart] = await Promise.all([
+      axios.get(`http://localhost:3001/list-transactions?month=${month}`),
+      axios.get(`http://localhost:3001/statistics?month=${month}`),
+      axios.get(`http://localhost:3001/bar-chart?month=${month}`),
+      axios.get(`http://localhost:3001/pie-chart?month=${month}`)
+    ]);
+
+    const combinedData = {
+      transactions: transactions.data,
+      statistics: statistics.data,
+      barChart: barChart.data,
+      pieChart: pieChart.data
+    };
+
+    res.json(combinedData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Server is running at http://localhost:${port}`);
+});
